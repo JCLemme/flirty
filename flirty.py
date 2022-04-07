@@ -5,9 +5,10 @@ import sys
 import math
 import datetime
 import random
+import re
 
 from PIL import Image, ImageFilter, ImageOps
-from trianglesolver import solve, degree
+import pytesseract
 
 
 def average_color(colors):
@@ -119,16 +120,50 @@ def get_average_of_circle(src, center, radius):
     return running_avg / len(check_points)
         
 
+def extract_temp_scale(src):
+    # Rotate, crop, and crush colors
+    textread = src.rotate(90, expand=True)
+    textread = textread.crop((0, 0, 100, textread.height-1))
+    textread = textread.convert('L')
+    textread = textread.point( lambda p: 255 if p > 160 else 0 )
+    #textread.show()
+
+    # OCR that bitch
+    scale_text = pytesseract.image_to_string(textread).split('\n')
+    scale_text = [ t.replace(' ', '') for t in scale_text if t ]
+
+    # Did we end up with two numbers?
+    if len(scale_text) != 2: return (), ''
+
+    # Extract numbers, onvert to integer, and return as tuple plus unit
+    temp_scale = ( int(re.sub('[^0-9]', '', scale_text[1])), int(re.sub('[^0-9]', '', scale_text[0])) )
+    temp_unit = scale_text[0][-1:]
+    
+    return temp_scale, (temp_unit) if temp_unit.isalpha() else ('')
+    
+
+def map_color_to_temp(scale, width, color):
+    return scale[0] + ( color / width ) * (scale[1]-scale[0])
+
+
+
+
+
 # -----------------------------------------------------------------------------------
 # Main function
 if __name__ == "__main__":
     # Open image
     img = Image.open(sys.argv[1])
+    
+    scale, unit = extract_temp_scale(img)
+    print(scale)
 
     # Find average color of various locations in triangle
     targets = [ ((346,499),8), ((386,484),8), ((388,514),8), ((374,498),24) ]
     for target in targets:
-        print("Area around " + str(target[0]) + " (rad " + str(target[1]) + ") is " + str(get_average_of_circle(img, target[0], target[1])))
+        aver = get_average_of_circle(img, target[0], target[1])
+        print("Area around " + str(target[0]) + " (rad " + str(target[1]) + ") is " + str(aver))
+        print("  We think it's " + str(map_color_to_temp(scale, img.width, aver)) + " deg " + unit)
     
     
         
