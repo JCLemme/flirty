@@ -9,7 +9,7 @@ import random
 
 
 class Point:
-    def __init__(self, x, y):
+    def __init__(self, x: int, y: int):
         self.x = x
         self.y = y
 
@@ -17,20 +17,4 @@ class Point:
         yield self.x
         yield self.y
 
-
-class Color:
-    def __init__(self, source):
-        self.r = source[0]
-        self.g = source[1]
-        self.b = source[2]
-        self.c = source[3]
-
-    def __iter__(self):
-        yield self.r
-        yield self.g
-        yield self.b
-        yield self.a
-
-
-class Colormap:
 
