@@ -1,30 +1,20 @@
 #!/usr/bin/env python3
 
 import os
+import csv
+import re
 import sys
 import math
 import datetime
 import random
-import re
 
-from PIL import Image, ImageFilter, ImageOps
+import imageio
 import pytesseract
+import numpy as np
+from PIL import Image, ImageFilter, ImageOps
 
 
-def average_color(colors):
-    if len(colors) == 0: return ()
-    avg = [None] * len(colors[0])
-
-    for color in colors:
-        for p in range(0, len(avg)):
-            avg[p] += color[p]
-
-    for p in range(0, len(avg)):
-        avg[p] /= len(colors)
-
-    return tuple(avg)
-
-
+# Scale and color manipulation
 def quantize_color(src, row, comp):
     # First, find the closest match on the scale
     close_x = 0
@@ -70,14 +60,6 @@ def quantize_color(src, row, comp):
     return close_x
    
 
-def test_quantizer(src, row, iterations):
-    for i in range(0, iterations):
-        randloc = (random.randrange(0, src.width), random.randrange(0, src.height))
-        rand_col = src.getpixel(randloc)
-        print("Found " + str(rand_col) + " at " + str(randloc))
-        quantize_color(src, row, rand_col)
-
-
 def generate_circle_points(radius):
     # This is the Bad Way of doing this, the least efficient way
     # Bill Atkinson cries
@@ -122,24 +104,28 @@ def get_average_of_circle(src, center, radius):
 
 def extract_temp_scale(src):
     # Rotate, crop, and crush colors
-    textread = src.rotate(90, expand=True)
+    #textread = src.rotate(90, expand=True)
+    textread = src
     textread = textread.crop((0, 0, 100, textread.height-1))
     textread = textread.convert('L')
-    textread = textread.point( lambda p: 255 if p > 160 else 0 )
+    textread = textread.point( lambda p: 255 if p > 100 else 0 )
     #textread.show()
 
     # OCR that bitch
+    print(pytesseract.image_to_data(textread))
     scale_text = pytesseract.image_to_string(textread).split('\n')
     scale_text = [ t.replace(' ', '') for t in scale_text if t ]
-
+    
     # Did we end up with two numbers?
-    if len(scale_text) != 2: return (), ''
+    if len(scale_text) != 2: return (0, 0), ''
 
     # Extract numbers, onvert to integer, and return as tuple plus unit
-    temp_scale = ( int(re.sub('[^0-9]', '', scale_text[1])), int(re.sub('[^0-9]', '', scale_text[0])) )
-    temp_unit = scale_text[0][-1:]
-    
-    return temp_scale, (temp_unit) if temp_unit.isalpha() else ('')
+    try:
+        temp_scale = ( int(re.sub('[^0-9]', '', scale_text[1])), int(re.sub('[^0-9]', '', scale_text[0])) )
+        temp_unit = scale_text[0][-1:]
+        return temp_scale, (temp_unit) if temp_unit.isalpha() else ('')
+    except ValueError:
+        return (0,0), ''
     
 
 def map_color_to_temp(scale, width, color):
@@ -148,22 +134,55 @@ def map_color_to_temp(scale, width, color):
 
 
 
-
 # -----------------------------------------------------------------------------------
 # Main function
 if __name__ == "__main__":
-    # Open image
-    img = Image.open(sys.argv[1])
-    
-    scale, unit = extract_temp_scale(img)
-    print(scale)
 
-    # Find average color of various locations in triangle
-    targets = [ ((346,499),8), ((386,484),8), ((388,514),8), ((374,498),24) ]
-    for target in targets:
-        aver = get_average_of_circle(img, target[0], target[1])
-        print("Area around " + str(target[0]) + " (rad " + str(target[1]) + ") is " + str(aver))
-        print("  We think it's " + str(map_color_to_temp(scale, img.width, aver)) + " deg " + unit)
-    
-    
+    # This hardcoded main function was written to work on a handful of specific thermal camera videos.
+    # Its operation should be straightforward enough to understand and modify to suit your needs.
+    # That being said, if you run this script just on whatever video, the results will be meaningless (and it might crash!)
+
+    # Open movie file
+    mov = imageio.get_reader(sys.argv[1])
+    framecount = 0
+
+    # Then make a CSV to write the results to
+    datafile = open(sys.argv[2], 'w')
+    datacsv = csv.writer(datafile)
+
+    # We love hardcoding 
+    datacsv.writerow(['frame', 'min_temp', 'max_temp', 'temp_unit', 'a_raw', 'a_norm', 'b_raw', 'b_norm', 'c_raw', 'c_norm', 'd_raw', 'd_norm'])
+
+    # Every 75th frame we read...
+    for i, iio_img in enumerate(mov):
+        if framecount % 75 == 0:
+            # Convert from ImageIO frame to PIL image
+            img = Image.fromarray(iio_img.astype('uint8'), 'RGB')
+            img = img.rotate(180)
+
+            # Get scale
+            scale, unit = extract_temp_scale(img)
+            print(scale)
+
+            img = img.rotate(-90, expand=True)
+
+            # Find average color of various (hardcoded) locations in triangle
+            targets = [ ((346,499),8), ((386,484),8), ((388,514),8), ((374,498),24) ]
+            avers = []
+            for target in targets:
+                aver = get_average_of_circle(img, target[0], target[1])
+                if unit != '': norm = map_color_to_temp(scale, img.width, aver)
+                else: norm = 0
+                print("Area around " + str(target[0]) + " (rad " + str(target[1]) + ") is " + str(aver))
+                print("  We think it's " + str(norm) + " deg " + unit)
+                avers.append((aver, norm))
+
+            datacsv.writerow([framecount, scale[0], scale[1], unit, avers[0][0], avers[0][1], avers[1][0], avers[1][1], avers[2][0], avers[2][1], avers[3][0], avers[3][1] ])
+        framecount += 1
+
+    datafile.close()
+
+
+            
+            
         
