@@ -13,7 +13,6 @@ import pytesseract
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
-
 # Scale and color manipulation
 def quantize_color(src, row, comp):
     # First, find the closest match on the scale
@@ -100,16 +99,23 @@ def get_average_of_circle(src, center, radius):
         running_avg += found_col
 
     return running_avg / len(check_points)
-        
 
-def extract_temp_scale(src):
+
+def is_greytone(colo, thresh):
+    if abs(colo[0] - colo[1]) < thresh and abs(colo[0] - colo[2]) < thresh and abs(colo[1]-colo[2]) < thresh:
+        return True
+
+    return False
+
+
+def extract_temp_scale(src, cropzone):
     # Rotate, crop, and crush colors
-    #textread = src.rotate(90, expand=True)
-    textread = src
-    textread = textread.crop((0, 0, 100, textread.height-1))
+    textread = src.crop(cropzone)
+    textread = textread.resize((textread.width * 8, textread.height * 8), Image.Resampling.BICUBIC)
     textread = textread.convert('L')
-    textread = textread.point( lambda p: 255 if p > 100 else 0 )
+    #textread = textread.point( lambda p: 0 if p > 120 else 255)
     #textread.show()
+    #input()
 
     # OCR that bitch
     print(pytesseract.image_to_data(textread))
@@ -126,7 +132,6 @@ def extract_temp_scale(src):
         return temp_scale, (temp_unit) if temp_unit.isalpha() else ('')
     except ValueError:
         return (0,0), ''
-    
 
 def map_color_to_temp(scale, width, color):
     return scale[0] + ( color / width ) * (scale[1]-scale[0])
@@ -185,4 +190,3 @@ if __name__ == "__main__":
 
             
             
-        

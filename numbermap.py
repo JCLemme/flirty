@@ -9,84 +9,120 @@ import typing
 from collections import Counter
 
 import colormap
-
+import imageio
 import pytesseract
 import tesserocr
 from PIL import Image, ImageFilter, ImageOps
 
 
-tess_api=tesserocr.PyTessBaseAPI()
-tess_api.SetVariable("tessedit_char_whitelist", "0123456789°FC" )
+class TemperatureMatcher:
+    def __init__(self):
+        # Load up the Tesseract model and set our temperature finding whitelist
+        self.ocr_engine = tesserocr.PyTessBaseAPI()
+        self.ocr_engine.SetVariable("tessedit_char_whitelist", "0123456789°FC")
 
-def better_extract(image):
-    # Compile a set of images to try converting
-    sources = []
+    def __del__(self):
+        self.ocr_engine.End()
 
-    # TODO: do we need this many images? is there a better way of generating these images when needed vs before any OCR?
+    def matches_temperature(self, target: str) -> bool:
+        # Takes a string and figures out if we consider it a valid temperature 
+        # Regex in detail: match entire strings consisting of one to three numbers, a degree
+        # symbol, and either an F or C
+        return re.match("^[0-9]{1,3}[°][FC]$", target)
 
-    # Various versions of greyscale images: lumosity based and color channel based
-    for grey_image in [image.convert('L')] + list(image.split()):  
+    def recognize_text(self, image: Image) -> str:
+        # Runs OCR on an image and returns one line of output text
+        self.ocr_engine.SetImage(image)
+        return self.ocr_engine.GetUTF8Text().replace("\n", "")
 
-        # Both black-on-white and white-on-black versions
-        for invert_image in [grey_image, ImageOps.invert(grey_image)]:  
+    def pad_image(self, image: Image, size: int) -> Image:
+        # Pads an image with its perceived background color
+        pad_color = image.getpixel((0, 0))
+        return ImageOps.expand(image, size, pad_color)
 
-            # The image, as-is
-            sources.append( grey_image )                                                
-            
-            for thresh in range(100, 220, 20):
-                sources.append( image.convert('L').point(lambda p: p if p > thresh else 0) )       # Thresholded to either full black or full white
+    def generate_candidates(self, image: Image) -> list[Image]:
+        # Generate variations of the source image for OCRing
+        candidates = []
 
-    # Shuffle the image array. Since the images are generated in a kind of order above (all from lumosity, all from red...), a bad source 
-    # image - a confusing threshold or something - might generate a run of the same wrong number and fuck up the result. (Emphasis on might.)
-    random.shuffle(sources)
-    
-    # Now that we have more pictures than the Louvre, try and get text from them 
-    results = []
-    desired_matches = 10
-    runs_required = 0
-    
-    for i, run_image in enumerate(sources):
-        run_results = []
+        # TODO: do we need this many images? is there a better way of generating these images when needed vs before any OCR?
 
-        # Pad and enlarge the image, then OCR with and without sharpening 
-        run_image_padded = ImageOps.expand(run_image, 16)
-        run_image_big = run_image_padded.resize(tuple([8*d for d in run_image_padded.size]))
+        # Various versions of greyscale images: lumosity based and color channel based
+        for grey_image in [image.convert('L')] + list(image.split()):  
 
-        tess_api.SetImage(run_image_big)
-        run_results.append(tess_api.GetUTF8Text())
+            # Both black-on-white and white-on-black versions
+            for invert_image in [grey_image, ImageOps.invert(grey_image)]:  
 
-        run_image_crunched = run_image_big.resize((run_image_padded.width, run_image_padded.height))
-        run_image_sharp = run_image_big.filter(ImageFilter.EDGE_ENHANCE_MORE)
+                # The image, as-is
+                candidates.append( invert_image )                                                
+                
+                for thresh in range(100, 220, 20):
+                    candidates.append( invert_image.point(lambda p: 255 if p > thresh else 0) )       # Thresholded to either full black or full white
 
-        tess_api.SetImage(run_image_sharp)
-        run_results.append(tess_api.GetUTF8Text())
+        # Resize images and add a sharpened copy
+        bigger_candidates = []
 
-        runs_required += len(run_results)
+        for candidate in candidates:
+            big_candidate = candidate.resize((candidate.width * 8, candidate.height * 8))
+            bigger_candidates.append( big_candidate )
+            bigger_candidates.append( big_candidate.filter(ImageFilter.EDGE_ENHANCE_MORE) )
 
-        # Eliminate anything that doesn't fit our idea of a temperature
-        for result in run_results:
-            result = result.replace(' ', '')
-            result = result.replace('\n', '')
-            if re.match("^[0-9]{1,3}[°][FC]$", result): 
-                results.append(result)
+        # Shuffle the image array. Since the images are generated in a kind of order above (all from lumosity, all from red...), a bad source 
+        # image - a confusing threshold or something - might generate a run of the same wrong number and fuck up the result. (Emphasis on might.)
+        random.shuffle(bigger_candidates)
 
-        # Once we have some successful temperature matches...
-        if len(results) > desired_matches:
-            # If one value has more than 75% of the total matches, go with that
-            check_count = Counter(results)
-            top_matches = check_count.most_common(2)
+        # And return
+        return bigger_candidates
 
-            if top_matches[0][1] > int(len(results)*0.75):
-                return top_matches[0][0], 
-            
-            # Otherwise, set our expectations higher and try again
-            desired_matches += 10
-    
-    # If the conversion failed completely, return a placeholder value
-    if len(results) == 0:
-        return '-'
+    def get_temperature(self, image: Image) -> str:
+        # Grabs the temperature that's written in the image. Source image should be cropped close (~1-4px) to the text inside.
 
-    # If we ran out of images, return the most common result
-    check_count = Counter(results)
-    top_matches = check_count.most_common(1)
-    return top_matches[0][0]
+        # Pad the image to make Tesseract's job easier
+        image = self.pad_image(image, 16)
+
+        # Generate some variations to try OCR on
+        sources = self.generate_candidates(image)
+
+        # See if there's a consensus
+        results = Counter()
+        desired_results = 10
+
+        for source in sources:
+            # Get OCR's take on it
+            raw_result = self.recognize_text(source)
+
+            # If the result is a syntactically valid temperature, add it to the results database
+            if self.matches_temperature(raw_result): results[raw_result] += 1
+
+            # Check for consensus
+            if sum(results.values()) > desired_results:
+                print(results)
+                # Get the top two answers
+                top_matches = results.most_common(2)
+
+                # Assuming there's some matches for us...
+                if len(top_matches) > 0:
+                    # Return any match with >75% of the total matches
+                    if len(top_matches) == 1 or (len(top_matches) > 1 and top_matches[0][1] > (len(results)*0.75)):
+                        return top_matches[0][0],
+
+                # If no consensus was achieved, raise our expectations
+                desired_results += 10
+        
+        # If we couldn't reach consensus, return the most common match (or nothing if the OCR completely bombed)
+        if sum(results.values()) > 0:
+            return results.most_common(1)[0][0]
+        else:
+            return ""
+
+
+if __name__ == "__main__":
+    # Testing script
+    temps = TemperatureMatcher()
+
+    mv = imageio.get_reader(sys.argv[1])
+    for i, iio in enumerate(mv):
+        img = Image.fromarray(iio.astype('uint8'), 'RGB')
+        img = img.rotate(180)
+        numberzone = img.crop((16, 0, 70, 16))
+        print(temps.get_temperature(numberzone))
+
