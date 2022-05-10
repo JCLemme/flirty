@@ -49,6 +49,7 @@ class Colormap:
             new_data.append(image.getpixel((x, 0)))
 
         self.data = new_data
+        self.cache = {}
 
     def intensity_of(self, target: Color, use_cache: bool=True) -> float:
         # Find the approximate place a color would lie on a colorline
@@ -67,6 +68,7 @@ class Colormap:
         # TODO: flip these around - get index first
         close_dist = min(self.data, key = lambda c: math.dist(c, target))
         close = self.data.index(close_dist)
+        close_dist = math.dist(close_dist, target) # Oops, forgot to turn the color back into a distance. Should probably be renamed
 
         # At this point, we know the target color doesn't exactly match a scale color
         # So figure out where the target would be in between colors

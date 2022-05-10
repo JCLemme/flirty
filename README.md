@@ -1,5 +1,6 @@
 # flirty
 Extract temperature information from thermal camera stills
+![Example](/doc/banner_small.PNG)
 
 ## What can it do 
 
