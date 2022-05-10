@@ -9,7 +9,8 @@ import re
 
 from PIL import Image, ImageFilter, ImageOps
 import pytesseract
-
+import imageio as iio
+import numpy as np
 
 def average_color(colors):
     if len(colors) == 0: return ()
@@ -118,28 +119,32 @@ def get_average_of_circle(src, center, radius):
         running_avg += found_col
 
     return running_avg / len(check_points)
-        
 
-def extract_temp_scale(src):
+
+def is_greytone(colo, thresh):
+    if abs(colo[0] - colo[1]) < thresh and abs(colo[0] - colo[2]) < thresh and abs(colo[1]-colo[2]) < thresh:
+        return True
+
+    return False
+
+
+def extract_temp_scale(src, cropzone):
     # Rotate, crop, and crush colors
-    textread = src.rotate(90, expand=True)
-    textread = textread.crop((0, 0, 100, textread.height-1))
+    textread = src.crop(cropzone)
+    textread = textread.resize((textread.width * 8, textread.height * 8), Image.Resampling.BICUBIC)
     textread = textread.convert('L')
-    textread = textread.point( lambda p: 255 if p > 160 else 0 )
+    #textread = textread.point( lambda p: 0 if p > 120 else 255)
     #textread.show()
+    #input()
 
     # OCR that bitch
-    scale_text = pytesseract.image_to_string(textread).split('\n')
+    scale_text = pytesseract.image_to_string(textread, config='--psm 8').split('\n')
     scale_text = [ t.replace(' ', '') for t in scale_text if t ]
+    #print(scale_text)
 
     # Did we end up with two numbers?
-    if len(scale_text) != 2: return (), ''
-
-    # Extract numbers, onvert to integer, and return as tuple plus unit
-    temp_scale = ( int(re.sub('[^0-9]', '', scale_text[1])), int(re.sub('[^0-9]', '', scale_text[0])) )
-    temp_unit = scale_text[0][-1:]
-    
-    return temp_scale, (temp_unit) if temp_unit.isalpha() else ('')
+    if len(scale_text) < 1: return ''
+    return ''.join(scale_text)
     
 
 def map_color_to_temp(scale, width, color):
@@ -153,17 +158,33 @@ def map_color_to_temp(scale, width, color):
 # Main function
 if __name__ == "__main__":
     # Open image
-    img = Image.open(sys.argv[1])
+    #img = Image.open(sys.argv[1])
     
-    scale, unit = extract_temp_scale(img)
-    print(scale)
+    workscount = 0
+    framescount = 0
+    processed = 0
+
+    reader = iio.get_reader(sys.argv[1])
+    for i, im in enumerate(reader):
+        framescount += 1
+        if framescount % 80 == 0:
+            img = Image.fromarray(im.astype('uint8'), 'RGB')
+            scale_min = extract_temp_scale(img.rotate(180, expand=True), (11, 0, 80, 25))
+            if scale_min != '': workscount += 1
+            scale_max = extract_temp_scale(img.rotate(180, expand=True), (11, img.height-26, 80, img.height-1))
+            if scale_max != '': workscount += 1
+            processed += 1
+            print(scale_min, " ", scale_max)
+
+    print("Pulled " + str(workscount) + " of an expected " + str(processed*2) + " numbers")
+    sys.exit(0)
 
     # Find average color of various locations in triangle
-    targets = [ ((346,499),8), ((386,484),8), ((388,514),8), ((374,498),24) ]
-    for target in targets:
-        aver = get_average_of_circle(img, target[0], target[1])
-        print("Area around " + str(target[0]) + " (rad " + str(target[1]) + ") is " + str(aver))
-        print("  We think it's " + str(map_color_to_temp(scale, img.width, aver)) + " deg " + unit)
+    #targets = [ ((346,499),8), ((386,484),8), ((388,514),8), ((374,498),24) ]
+    #for target in targets:
+    #    aver = get_average_of_circle(img, target[0], target[1])
+    #    print("Area around " + str(target[0]) + " (rad " + str(target[1]) + ") is " + str(aver))
+    #    print("  We think it's " + str(map_color_to_temp(scale, img.width, aver)) + " deg " + unit)
     
     
         
